@@ -2,10 +2,13 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"image/color"
 	"image/png"
+	"math"
 	"strconv"
 	"strings"
+	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
@@ -27,6 +30,9 @@ const (
 	defaultYMax    = 1.2
 	defaultMaxIter = 200
 	minDragSize    = 4
+	maxScale       = 4
+	minImageSize   = 50
+	resizeDelay    = 300 * time.Millisecond
 )
 
 // params bündelt die Eingaben der Sidebar.
@@ -77,6 +83,58 @@ func parseParams(xmin, xmax, ymin, ymax, iter string) (params, error) {
 
 func formatFloat(v float64) string {
 	return strconv.FormatFloat(v, 'g', -1, 64)
+}
+
+// fitBoundsToAspect erweitert den Bereich um sein Zentrum, sodass die Pixel quadratisch sind.
+func fitBoundsToAspect(bounds params, width, height int) params {
+	widthSpan, heightSpan := bounds.xmax-bounds.xmin, bounds.ymax-bounds.ymin
+	if width <= 0 || height <= 0 || widthSpan <= 0 || heightSpan <= 0 {
+		return bounds
+	}
+	target := float64(width) / float64(height)
+	if widthSpan/heightSpan < target {
+		widthSpan = heightSpan * target
+	} else {
+		heightSpan = widthSpan / target
+	}
+	centerX, centerY := (bounds.xmin+bounds.xmax)/2, (bounds.ymin+bounds.ymax)/2
+	fitted := bounds
+	fitted.xmin, fitted.xmax = centerX-widthSpan/2, centerX+widthSpan/2
+	fitted.ymin, fitted.ymax = centerY-heightSpan/2, centerY+heightSpan/2
+	return fitted
+}
+
+// clampSize skaliert die Größe unter Beibehaltung des Seitenverhältnisses in die erlaubten Grenzen.
+func clampSize(width, height int) (int, int) {
+	if width <= 0 || height <= 0 {
+		return minImageSize, minImageSize
+	}
+	scale := 1.0
+	if factor := float64(maxScale*imgWidth) / float64(width); factor < scale {
+		scale = factor
+	}
+	if factor := float64(maxScale*imgHeight) / float64(height); factor < scale {
+		scale = factor
+	}
+	width = int(math.Round(float64(width) * scale))
+	height = int(math.Round(float64(height) * scale))
+	if width < minImageSize {
+		width = minImageSize
+	}
+	if height < minImageSize {
+		height = minImageSize
+	}
+	return width, height
+}
+
+func validateSize(width, height int) error {
+	if width < minImageSize || height < minImageSize {
+		return fmt.Errorf("Größe muss mindestens %d×%d px sein", minImageSize, minImageSize)
+	}
+	if width > maxScale*imgWidth || height > maxScale*imgHeight {
+		return fmt.Errorf("Größe darf höchstens %d×%d px sein", maxScale*imgWidth, maxScale*imgHeight)
+	}
+	return nil
 }
 
 func fittedImageRect(widgetSize, imageSize fyne.Size) (fyne.Position, fyne.Size, bool) {
@@ -234,6 +292,8 @@ type tappableImage struct {
 	onSecondaryTap func(fyne.Position, fyne.Size)
 	onDrag         func(fyne.Position, fyne.Position, fyne.Size, bool)
 	onScroll       func(float32)
+	onResize       func(fyne.Size)
+	lastSize       fyne.Size
 	keepAspect     bool
 	dragStart      fyne.Position
 	dragEnd        fyne.Position
@@ -266,6 +326,12 @@ type tappableImageRenderer struct {
 
 func (r *tappableImageRenderer) Layout(size fyne.Size) {
 	r.widget.image.Resize(size)
+	if size != r.widget.lastSize {
+		r.widget.lastSize = size
+		if r.widget.onResize != nil {
+			r.widget.onResize(size)
+		}
+	}
 	if !r.widget.dragging {
 		r.widget.selection.Hide()
 		return
@@ -402,7 +468,14 @@ func absFloat(value float32) float32 {
 
 // runGUI zeigt das Fraktal in einem Fenster mit Parameter-Sidebar an.
 func runGUI() error {
-	grid, err := Compute(imgWidth, imgHeight, defaultXMin, defaultXMax, defaultYMin, defaultYMax, defaultMaxIter)
+	renderW, renderH := imgWidth, imgHeight
+	defaults := params{
+		xmin: defaultXMin, xmax: defaultXMax,
+		ymin: defaultYMin, ymax: defaultYMax,
+		maxIter: defaultMaxIter,
+	}
+	start := fitBoundsToAspect(defaults, renderW, renderH)
+	grid, err := Compute(renderW, renderH, start.xmin, start.xmax, start.ymin, start.ymax, start.maxIter)
 	if err != nil {
 		return err
 	}
@@ -416,11 +489,7 @@ func runGUI() error {
 	img := canvas.NewImageFromImage(Render(grid, defaultMaxIter, selectedPalette))
 	img.FillMode = canvas.ImageFillContain
 	img.ScaleMode = canvas.ImageScaleFastest
-	displayed := params{
-		xmin: defaultXMin, xmax: defaultXMax,
-		ymin: defaultYMin, ymax: defaultYMax,
-		maxIter: defaultMaxIter,
-	}
+	displayed := start
 
 	a := app.New()
 	w := a.NewWindow("xbfrac")
@@ -448,14 +517,39 @@ func runGUI() error {
 		}
 	})
 	paletteSelect.SetSelected(paletteNames[selectedPaletteIndex])
-	setDefaults := func() {
-		xminE.SetText(formatFloat(defaultXMin))
-		xmaxE.SetText(formatFloat(defaultXMax))
-		yminE.SetText(formatFloat(defaultYMin))
-		ymaxE.SetText(formatFloat(defaultYMax))
-		iterE.SetText(strconv.Itoa(defaultMaxIter))
+	setBounds := func(b params) {
+		xminE.SetText(formatFloat(b.xmin))
+		xmaxE.SetText(formatFloat(b.xmax))
+		yminE.SetText(formatFloat(b.ymin))
+		ymaxE.SetText(formatFloat(b.ymax))
 	}
-	setDefaults()
+	setBounds(start)
+	iterE.SetText(strconv.Itoa(defaultMaxIter))
+
+	imageSize := fyne.NewSize(float32(renderW), float32(renderH))
+	var imageWidget *tappableImage
+	follow := true
+	lockedAspect := float64(renderW) / float64(renderH)
+	resizeAgain := false
+	widthE, heightE := widget.NewEntry(), widget.NewEntry()
+	widthE.SetText(strconv.Itoa(renderW))
+	heightE.SetText(strconv.Itoa(renderH))
+	widthE.Disable()
+	heightE.Disable()
+	targetSize := func() (int, int, error) {
+		if follow {
+			size := imageWidget.Size()
+			width, height := clampSize(int(size.Width), int(size.Height))
+			return width, height, nil
+		}
+		width, err := strconv.Atoi(strings.TrimSpace(widthE.Text))
+		if err != nil {
+			return 0, 0, errors.New("Breite: keine gültige ganze Zahl")
+		}
+		height := int(math.Round(float64(width) / lockedAspect))
+		return width, height, validateSize(width, height)
+	}
+	var applyWindowSize func()
 
 	var calcBtn, resetBtn, saveBtn *widget.Button
 	recalc := func() {
@@ -467,26 +561,40 @@ func runGUI() error {
 			dialog.ShowError(err, w)
 			return
 		}
+		width, height, err := targetSize()
+		if err != nil {
+			dialog.ShowError(err, w)
+			return
+		}
 		calculating = true
 		calcBtn.Disable()
 		resetBtn.Disable()
 		saveBtn.Disable()
 		paletteSelect.Disable()
 		go func() {
-			g, err := Compute(imgWidth, imgHeight, pr.xmin, pr.xmax, pr.ymin, pr.ymax, pr.maxIter)
+			g, err := Compute(width, height, pr.xmin, pr.xmax, pr.ymin, pr.ymax, pr.maxIter)
 			fyne.Do(func() {
 				calculating = false
-				defer calcBtn.Enable()
-				defer resetBtn.Enable()
-				defer saveBtn.Enable()
-				defer paletteSelect.Enable()
+				calcBtn.Enable()
+				resetBtn.Enable()
+				saveBtn.Enable()
+				paletteSelect.Enable()
 				if err != nil {
 					dialog.ShowError(err, w)
 					return
 				}
 				displayed = pr
 				grid = g
+				renderW, renderH = width, height
+				imageSize = fyne.NewSize(float32(width), float32(height))
+				imageWidget.imageSize = imageSize
+				widthE.SetText(strconv.Itoa(width))
+				heightE.SetText(strconv.Itoa(height))
 				repaint()
+				if resizeAgain {
+					resizeAgain = false
+					applyWindowSize()
+				}
 			})
 		}()
 	}
@@ -494,7 +602,7 @@ func runGUI() error {
 		if calculating {
 			return
 		}
-		center, ok := mapTapToComplex(position, size, fyne.NewSize(imgWidth, imgHeight), displayed)
+		center, ok := mapTapToComplex(position, size, imageSize, displayed)
 		if !ok {
 			return
 		}
@@ -503,14 +611,25 @@ func runGUI() error {
 			dialog.ShowError(err, w)
 			return
 		}
-		xminE.SetText(formatFloat(zoomed.xmin))
-		xmaxE.SetText(formatFloat(zoomed.xmax))
-		yminE.SetText(formatFloat(zoomed.ymin))
-		ymaxE.SetText(formatFloat(zoomed.ymax))
+		setBounds(zoomed)
 		recalc()
 	}
-	imageSize := fyne.NewSize(imgWidth, imgHeight)
-	imageWidget := newTappableImage(img, imageSize,
+	applyWindowSize = func() {
+		if !follow {
+			return
+		}
+		if calculating {
+			resizeAgain = true
+			return
+		}
+		width, height, _ := targetSize()
+		if width == renderW && height == renderH {
+			return
+		}
+		setBounds(fitBoundsToAspect(displayed, width, height))
+		recalc()
+	}
+	imageWidget = newTappableImage(img, imageSize,
 		func(position fyne.Position, size fyne.Size) {
 			zoomAt(position, size, zoomIn)
 		},
@@ -525,10 +644,7 @@ func runGUI() error {
 			if !ok {
 				return
 			}
-			xminE.SetText(formatFloat(zoomed.xmin))
-			xmaxE.SetText(formatFloat(zoomed.xmax))
-			yminE.SetText(formatFloat(zoomed.ymin))
-			ymaxE.SetText(formatFloat(zoomed.ymax))
+			setBounds(zoomed)
 			recalc()
 		},
 		func(deltaY float32) {
@@ -542,6 +658,27 @@ func runGUI() error {
 			}
 			paletteSelect.SetSelected(paletteNames[selectedPaletteIndex])
 		})
+	var resizeTimer *time.Timer
+	imageWidget.onResize = func(fyne.Size) {
+		if !follow {
+			return
+		}
+		if resizeTimer != nil {
+			resizeTimer.Stop()
+		}
+		resizeTimer = time.AfterFunc(resizeDelay, func() { fyne.Do(applyWindowSize) })
+	}
+	followCheck := widget.NewCheck("Fenstergröße folgen", func(on bool) {
+		follow = on
+		if on {
+			widthE.Disable()
+			applyWindowSize()
+			return
+		}
+		lockedAspect = float64(renderW) / float64(renderH)
+		widthE.Enable()
+	})
+	followCheck.Checked = true
 	if dc, ok := w.Canvas().(desktop.Canvas); ok {
 		isShift := func(e *fyne.KeyEvent) bool {
 			return e.Name == desktop.KeyShiftLeft || e.Name == desktop.KeyShiftRight
@@ -559,7 +696,10 @@ func runGUI() error {
 	}
 	calcBtn = widget.NewButton("Neu berechnen", recalc)
 	resetBtn = widget.NewButton("Zurücksetzen", func() {
-		setDefaults()
+		if width, height, err := targetSize(); err == nil {
+			setBounds(fitBoundsToAspect(defaults, width, height))
+		}
+		iterE.SetText(strconv.Itoa(defaultMaxIter))
 		paletteSelect.SetSelected(paletteNames[0])
 		recalc()
 	})
@@ -595,12 +735,15 @@ func runGUI() error {
 		widget.NewLabel("ymin"), yminE,
 		widget.NewLabel("ymax"), ymaxE,
 		widget.NewLabel("maxIter"), iterE,
+		widget.NewLabel("Größe (px)"), followCheck, widthE, heightE,
 		widget.NewLabel("Farbpalette"), paletteSelect,
 		calcBtn, resetBtn, saveBtn,
 	)
 	sidebar := container.NewBorder(nil, nil, nil, widget.NewSeparator(),
 		container.NewPadded(form))
-	fixed := container.NewGridWrap(fyne.NewSize(sidebarWidth, imgHeight), sidebar)
+	spacer := canvas.NewRectangle(color.Transparent)
+	spacer.SetMinSize(fyne.NewSize(sidebarWidth, 0))
+	fixed := container.NewStack(spacer, container.NewVScroll(sidebar))
 
 	w.SetContent(container.NewBorder(nil, nil, fixed, nil, imageWidget))
 	w.Resize(fyne.NewSize(imgWidth+sidebarWidth, imgHeight))
