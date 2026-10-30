@@ -3,7 +3,7 @@ package main
 import "log"
 
 func main() {
-	if err := runGUI(NewClassicPalette()); err != nil {
+	if err := runGUI(); err != nil {
 		log.Fatal(err)
 	}
 }

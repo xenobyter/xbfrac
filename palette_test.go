@@ -22,6 +22,26 @@ func TestPaletteHitsStopsAndCycles(t *testing.T) {
 	}
 }
 
+func TestAvailablePalettes(t *testing.T) {
+	palettes := AvailablePalettes()
+	if len(palettes) != 4 {
+		t.Fatalf("got %d palettes, want 4", len(palettes))
+	}
+	for _, option := range palettes {
+		t.Run(option.Name, func(t *testing.T) {
+			if option.Palette == nil {
+				t.Fatal("palette is nil")
+			}
+			if got := option.Palette.Color(100, 100); got == nil {
+				t.Fatal("outside color is nil")
+			}
+			if got := option.Palette.Color(17, 100); got == option.Palette.Color(100, 100) {
+				t.Fatal("inside and outside colors unexpectedly match")
+			}
+		})
+	}
+}
+
 func TestLerp(t *testing.T) {
 	a, b := color.RGBA{0, 0, 0, 255}, color.RGBA{200, 100, 50, 255}
 	if got := interpolateColor(a, b, 0.5); got != (color.RGBA{100, 50, 25, 255}) {

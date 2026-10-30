@@ -200,6 +200,7 @@ type tappableImage struct {
 	onTap          func(fyne.Position, fyne.Size)
 	onSecondaryTap func(fyne.Position, fyne.Size)
 	onDrag         func(fyne.Position, fyne.Position, fyne.Size)
+	onScroll       func(float32)
 	dragStart      fyne.Position
 	dragEnd        fyne.Position
 	pointerDown    bool
@@ -207,9 +208,9 @@ type tappableImage struct {
 	suppressTap    bool
 }
 
-func newTappableImage(image *canvas.Image, imageSize fyne.Size, onTap, onSecondaryTap func(fyne.Position, fyne.Size), onDrag func(fyne.Position, fyne.Position, fyne.Size)) *tappableImage {
+func newTappableImage(image *canvas.Image, imageSize fyne.Size, onTap, onSecondaryTap func(fyne.Position, fyne.Size), onDrag func(fyne.Position, fyne.Position, fyne.Size), onScroll func(float32)) *tappableImage {
 	tappable := &tappableImage{
-		image: image, imageSize: imageSize, onTap: onTap, onSecondaryTap: onSecondaryTap, onDrag: onDrag,
+		image: image, imageSize: imageSize, onTap: onTap, onSecondaryTap: onSecondaryTap, onDrag: onDrag, onScroll: onScroll,
 		selection: &canvas.Rectangle{
 			FillColor:   color.NRGBA{R: 0, G: 0, B: 0, A: 24},
 			StrokeColor: color.White,
@@ -331,6 +332,12 @@ func (t *tappableImage) TappedSecondary(event *fyne.PointEvent) {
 	}
 }
 
+func (t *tappableImage) Scrolled(event *fyne.ScrollEvent) {
+	if t.onScroll != nil {
+		t.onScroll(event.Scrolled.DY)
+	}
+}
+
 func absFloat(value float32) float32 {
 	if value < 0 {
 		return -value
@@ -339,12 +346,19 @@ func absFloat(value float32) float32 {
 }
 
 // runGUI zeigt das Fraktal in einem Fenster mit Parameter-Sidebar an.
-func runGUI(p Palette) error {
+func runGUI() error {
 	grid, err := Compute(imgWidth, imgHeight, defaultXMin, defaultXMax, defaultYMin, defaultYMax, defaultMaxIter)
 	if err != nil {
 		return err
 	}
-	img := canvas.NewImageFromImage(Render(grid, defaultMaxIter, p))
+	paletteOptions := AvailablePalettes()
+	paletteNames := make([]string, len(paletteOptions))
+	for index, option := range paletteOptions {
+		paletteNames[index] = option.Name
+	}
+	selectedPaletteIndex := 0
+	selectedPalette := paletteOptions[selectedPaletteIndex].Palette
+	img := canvas.NewImageFromImage(Render(grid, defaultMaxIter, selectedPalette))
 	img.FillMode = canvas.ImageFillContain
 	img.ScaleMode = canvas.ImageScaleFastest
 	displayed := params{
@@ -359,6 +373,26 @@ func runGUI(p Palette) error {
 	xminE, xmaxE := widget.NewEntry(), widget.NewEntry()
 	yminE, ymaxE := widget.NewEntry(), widget.NewEntry()
 	iterE := widget.NewEntry()
+	var paletteSelect *widget.Select
+	calculating := false
+	repaint := func() {
+		img.Image = Render(grid, displayed.maxIter, selectedPalette)
+		img.Refresh()
+	}
+	paletteSelect = widget.NewSelect(paletteNames, func(name string) {
+		if calculating {
+			return
+		}
+		for index, option := range paletteOptions {
+			if option.Name == name {
+				selectedPaletteIndex = index
+				selectedPalette = option.Palette
+				repaint()
+				return
+			}
+		}
+	})
+	paletteSelect.SetSelected(paletteNames[selectedPaletteIndex])
 	setDefaults := func() {
 		xminE.SetText(formatFloat(defaultXMin))
 		xmaxE.SetText(formatFloat(defaultXMax))
@@ -369,7 +403,6 @@ func runGUI(p Palette) error {
 	setDefaults()
 
 	var calcBtn, resetBtn *widget.Button
-	calculating := false
 	recalc := func() {
 		if calculating {
 			return
@@ -382,19 +415,21 @@ func runGUI(p Palette) error {
 		calculating = true
 		calcBtn.Disable()
 		resetBtn.Disable()
+		paletteSelect.Disable()
 		go func() {
 			g, err := Compute(imgWidth, imgHeight, pr.xmin, pr.xmax, pr.ymin, pr.ymax, pr.maxIter)
 			fyne.Do(func() {
 				calculating = false
 				defer calcBtn.Enable()
 				defer resetBtn.Enable()
+				defer paletteSelect.Enable()
 				if err != nil {
 					dialog.ShowError(err, w)
 					return
 				}
 				displayed = pr
-				img.Image = Render(g, pr.maxIter, p)
-				img.Refresh()
+				grid = g
+				repaint()
 			})
 		}()
 	}
@@ -438,10 +473,22 @@ func runGUI(p Palette) error {
 			yminE.SetText(formatFloat(zoomed.ymin))
 			ymaxE.SetText(formatFloat(zoomed.ymax))
 			recalc()
+		},
+		func(deltaY float32) {
+			if calculating || deltaY == 0 {
+				return
+			}
+			if deltaY > 0 {
+				selectedPaletteIndex = (selectedPaletteIndex + 1) % len(paletteOptions)
+			} else {
+				selectedPaletteIndex = (selectedPaletteIndex - 1 + len(paletteOptions)) % len(paletteOptions)
+			}
+			paletteSelect.SetSelected(paletteNames[selectedPaletteIndex])
 		})
 	calcBtn = widget.NewButton("Neu berechnen", recalc)
 	resetBtn = widget.NewButton("Zurücksetzen", func() {
 		setDefaults()
+		paletteSelect.SetSelected(paletteNames[0])
 		recalc()
 	})
 
@@ -451,6 +498,7 @@ func runGUI(p Palette) error {
 		widget.NewLabel("ymin"), yminE,
 		widget.NewLabel("ymax"), ymaxE,
 		widget.NewLabel("maxIter"), iterE,
+		widget.NewLabel("Farbpalette"), paletteSelect,
 		calcBtn, resetBtn,
 	)
 	sidebar := container.NewBorder(nil, nil, nil, widget.NewSeparator(),

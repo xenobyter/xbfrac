@@ -14,6 +14,11 @@ type GradientPalette struct {
 	Inside color.RGBA
 }
 
+type PaletteOption struct {
+	Name    string
+	Palette Palette
+}
+
 // NewClassicPalette liefert die klassische blau-weiß-orange-schwarze Palette.
 func NewClassicPalette() *GradientPalette {
 	return &GradientPalette{
@@ -26,6 +31,27 @@ func NewClassicPalette() *GradientPalette {
 		},
 		Period: 64,
 		Inside: color.RGBA{0, 0, 0, 255},
+	}
+}
+
+func AvailablePalettes() []PaletteOption {
+	return []PaletteOption{
+		{Name: "Classic", Palette: NewClassicPalette()},
+		{Name: "Fire", Palette: &GradientPalette{
+			Stops:  []color.RGBA{{20, 0, 40, 255}, {180, 20, 0, 255}, {255, 220, 40, 255}, {255, 255, 220, 255}},
+			Period: 80,
+			Inside: color.RGBA{0, 0, 0, 255},
+		}},
+		{Name: "Ocean", Palette: &GradientPalette{
+			Stops:  []color.RGBA{{0, 18, 60, 255}, {0, 120, 160, 255}, {160, 245, 220, 255}, {10, 40, 100, 255}},
+			Period: 80,
+			Inside: color.RGBA{0, 0, 0, 255},
+		}},
+		{Name: "Grayscale", Palette: &GradientPalette{
+			Stops:  []color.RGBA{{0, 0, 0, 255}, {255, 255, 255, 255}},
+			Period: 64,
+			Inside: color.RGBA{0, 0, 0, 255},
+		}},
 	}
 }
 

@@ -21,6 +21,17 @@ func TestRenderMapsGridThroughPalette(t *testing.T) {
 	}
 }
 
+func TestRenderPaletteChangesColors(t *testing.T) {
+	grid := [][]int{{17}}
+	classic := Render(grid, 100, NewClassicPalette())
+	fire := Render(grid, 100, AvailablePalettes()[1].Palette)
+	classicR, classicG, classicB, _ := classic.At(0, 0).RGBA()
+	fireR, fireG, fireB, _ := fire.At(0, 0).RGBA()
+	if classicR == fireR && classicG == fireG && classicB == fireB {
+		t.Fatal("expected selected palettes to render different colors")
+	}
+}
+
 func TestRenderEmptyGrid(t *testing.T) {
 	if b := Render(nil, 10, stubPalette{}).Bounds(); !b.Empty() {
 		t.Errorf("leeres Bild erwartet, got %v", b)
