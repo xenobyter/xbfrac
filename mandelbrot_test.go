@@ -131,3 +131,24 @@ func TestZoomInRejectsPrecisionExhaustion(t *testing.T) {
 		t.Fatal("zoomIn() returned no error when bounds collapse at float64 precision")
 	}
 }
+
+func TestZoomOut(t *testing.T) {
+	bounds := params{xmin: -2.2, xmax: 1, ymin: -1.2, ymax: 1.2, maxIter: 200}
+	got, err := zoomOut(bounds, complex(-0.5, 0.25))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, values := range map[string][2]float64{
+		"xmin": {got.xmin, -3.7},
+		"xmax": {got.xmax, 2.7},
+		"ymin": {got.ymin, -2.15},
+		"ymax": {got.ymax, 2.65},
+	} {
+		if math.Abs(values[0]-values[1]) > 1e-9 {
+			t.Errorf("%s = %v, want %v", name, values[0], values[1])
+		}
+	}
+	if got.maxIter != bounds.maxIter {
+		t.Errorf("maxIter = %d, want %d", got.maxIter, bounds.maxIter)
+	}
+}

@@ -113,14 +113,29 @@ func zoomIn(bounds params, center complex128) (params, error) {
 	return zoomed, nil
 }
 
-type tappableImage struct {
-	widget.BaseWidget
-	image *canvas.Image
-	onTap func(fyne.Position, fyne.Size)
+func zoomOut(bounds params, center complex128) (params, error) {
+	halfWidth := bounds.xmax - bounds.xmin
+	halfHeight := bounds.ymax - bounds.ymin
+	zoomed := bounds
+	zoomed.xmin = real(center) - halfWidth
+	zoomed.xmax = real(center) + halfWidth
+	zoomed.ymin = imag(center) - halfHeight
+	zoomed.ymax = imag(center) + halfHeight
+	if zoomed.xmin >= zoomed.xmax || zoomed.ymin >= zoomed.ymax {
+		return bounds, errors.New("Zoomgrenze durch Gleitkommagenauigkeit erreicht")
+	}
+	return zoomed, nil
 }
 
-func newTappableImage(image *canvas.Image, onTap func(fyne.Position, fyne.Size)) *tappableImage {
-	tappable := &tappableImage{image: image, onTap: onTap}
+type tappableImage struct {
+	widget.BaseWidget
+	image          *canvas.Image
+	onTap          func(fyne.Position, fyne.Size)
+	onSecondaryTap func(fyne.Position, fyne.Size)
+}
+
+func newTappableImage(image *canvas.Image, onTap, onSecondaryTap func(fyne.Position, fyne.Size)) *tappableImage {
+	tappable := &tappableImage{image: image, onTap: onTap, onSecondaryTap: onSecondaryTap}
 	tappable.ExtendBaseWidget(tappable)
 	return tappable
 }
@@ -132,6 +147,12 @@ func (t *tappableImage) CreateRenderer() fyne.WidgetRenderer {
 func (t *tappableImage) Tapped(event *fyne.PointEvent) {
 	if t.onTap != nil {
 		t.onTap(event.Position, t.Size())
+	}
+}
+
+func (t *tappableImage) TappedSecondary(event *fyne.PointEvent) {
+	if t.onSecondaryTap != nil {
+		t.onSecondaryTap(event.Position, t.Size())
 	}
 }
 
@@ -195,7 +216,7 @@ func runGUI(p Palette) error {
 			})
 		}()
 	}
-	imageWidget := newTappableImage(img, func(position fyne.Position, size fyne.Size) {
+	zoomAt := func(position fyne.Position, size fyne.Size, zoom func(params, complex128) (params, error)) {
 		if calculating {
 			return
 		}
@@ -203,7 +224,7 @@ func runGUI(p Palette) error {
 		if !ok {
 			return
 		}
-		zoomed, err := zoomIn(displayed, center)
+		zoomed, err := zoom(displayed, center)
 		if err != nil {
 			dialog.ShowError(err, w)
 			return
@@ -213,7 +234,14 @@ func runGUI(p Palette) error {
 		yminE.SetText(formatFloat(zoomed.ymin))
 		ymaxE.SetText(formatFloat(zoomed.ymax))
 		recalc()
-	})
+	}
+	imageWidget := newTappableImage(img,
+		func(position fyne.Position, size fyne.Size) {
+			zoomAt(position, size, zoomIn)
+		},
+		func(position fyne.Position, size fyne.Size) {
+			zoomAt(position, size, zoomOut)
+		})
 	calcBtn = widget.NewButton("Neu berechnen", recalc)
 	resetBtn = widget.NewButton("Zurücksetzen", func() {
 		setDefaults()
