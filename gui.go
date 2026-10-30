@@ -41,6 +41,114 @@ type params struct {
 	maxIter                int
 }
 
+type viewerState struct {
+	renderWidth, renderHeight int
+	grid                      [][]int
+	bounds                    params
+	imageSize                 fyne.Size
+	window                    fyne.Window
+	xminEntry, xmaxEntry      *widget.Entry
+	yminEntry, ymaxEntry      *widget.Entry
+	iterEntry                 *widget.Entry
+	widthEntry, heightEntry   *widget.Entry
+	imageWidget               *tappableImage
+	calcButton, resetButton   *widget.Button
+	saveButton                *widget.Button
+	paletteSelect             *widget.Select
+	calculating               bool
+	resizeAgain               bool
+	follow                    bool
+	targetSize                func() (int, int, error)
+	repaint                   func()
+}
+
+func (v *viewerState) recalculate() {
+	if v.calculating {
+		return
+	}
+	requested, err := parseParams(v.xminEntry.Text, v.xmaxEntry.Text, v.yminEntry.Text, v.ymaxEntry.Text, v.iterEntry.Text)
+	if err != nil {
+		dialog.ShowError(err, v.window)
+		return
+	}
+	width, height, err := v.targetSize()
+	if err != nil {
+		dialog.ShowError(err, v.window)
+		return
+	}
+	v.calculating = true
+	v.calcButton.Disable()
+	v.resetButton.Disable()
+	v.saveButton.Disable()
+	v.paletteSelect.Disable()
+	go func() {
+		grid, err := Compute(width, height, requested.xmin, requested.xmax, requested.ymin, requested.ymax, requested.maxIter)
+		fyne.Do(func() {
+			v.calculating = false
+			v.calcButton.Enable()
+			v.resetButton.Enable()
+			v.saveButton.Enable()
+			v.paletteSelect.Enable()
+			if err != nil {
+				dialog.ShowError(err, v.window)
+				return
+			}
+			v.bounds = requested
+			v.grid = grid
+			v.renderWidth, v.renderHeight = width, height
+			v.imageSize = fyne.NewSize(float32(width), float32(height))
+			v.imageWidget.imageSize = v.imageSize
+			v.widthEntry.SetText(strconv.Itoa(width))
+			v.heightEntry.SetText(strconv.Itoa(height))
+			v.repaint()
+			if v.resizeAgain {
+				v.resizeAgain = false
+				v.applyWindowSize()
+			}
+		})
+	}()
+}
+
+func (v *viewerState) setBounds(bounds params) {
+	v.xminEntry.SetText(formatFloat(bounds.xmin))
+	v.xmaxEntry.SetText(formatFloat(bounds.xmax))
+	v.yminEntry.SetText(formatFloat(bounds.ymin))
+	v.ymaxEntry.SetText(formatFloat(bounds.ymax))
+}
+
+func (v *viewerState) zoomAt(position fyne.Position, size fyne.Size, zoom func(params, complex128) (params, error)) {
+	if v.calculating {
+		return
+	}
+	center, ok := mapTapToComplex(position, size, v.imageSize, v.bounds)
+	if !ok {
+		return
+	}
+	zoomed, err := zoom(v.bounds, center)
+	if err != nil {
+		dialog.ShowError(err, v.window)
+		return
+	}
+	v.setBounds(zoomed)
+	v.recalculate()
+}
+
+func (v *viewerState) applyWindowSize() {
+	if !v.follow {
+		return
+	}
+	if v.calculating {
+		v.resizeAgain = true
+		return
+	}
+	width, height, _ := v.targetSize()
+	if width == v.renderWidth && height == v.renderHeight {
+		return
+	}
+	v.setBounds(fitBoundsToAspect(v.bounds, width, height))
+	v.recalculate()
+}
+
 func parseFloatField(name, s string) (float64, error) {
 	v, err := strconv.ParseFloat(strings.TrimSpace(strings.ReplaceAll(s, ",", ".")), 64)
 	if err != nil {
@@ -255,9 +363,9 @@ func mapDragToBounds(start, end fyne.Position, widgetSize, imageSize fyne.Size, 
 	return zoomed, true
 }
 
-func zoomIn(bounds params, center complex128) (params, error) {
-	halfWidth := (bounds.xmax - bounds.xmin) / 4
-	halfHeight := (bounds.ymax - bounds.ymin) / 4
+func zoomBounds(bounds params, center complex128, halfSpanScale float64) (params, error) {
+	halfWidth := (bounds.xmax - bounds.xmin) * halfSpanScale
+	halfHeight := (bounds.ymax - bounds.ymin) * halfSpanScale
 	zoomed := bounds
 	zoomed.xmin = real(center) - halfWidth
 	zoomed.xmax = real(center) + halfWidth
@@ -269,18 +377,12 @@ func zoomIn(bounds params, center complex128) (params, error) {
 	return zoomed, nil
 }
 
+func zoomIn(bounds params, center complex128) (params, error) {
+	return zoomBounds(bounds, center, 0.25)
+}
+
 func zoomOut(bounds params, center complex128) (params, error) {
-	halfWidth := bounds.xmax - bounds.xmin
-	halfHeight := bounds.ymax - bounds.ymin
-	zoomed := bounds
-	zoomed.xmin = real(center) - halfWidth
-	zoomed.xmax = real(center) + halfWidth
-	zoomed.ymin = imag(center) - halfHeight
-	zoomed.ymax = imag(center) + halfHeight
-	if zoomed.xmin >= zoomed.xmax || zoomed.ymin >= zoomed.ymax {
-		return bounds, errors.New("Zoomgrenze durch Gleitkommagenauigkeit erreicht")
-	}
-	return zoomed, nil
+	return zoomBounds(bounds, center, 1)
 }
 
 type tappableImage struct {
@@ -479,6 +581,12 @@ func runGUI() error {
 	if err != nil {
 		return err
 	}
+	state := viewerState{
+		renderWidth: renderW, renderHeight: renderH,
+		grid: grid, bounds: start,
+		imageSize: fyne.NewSize(float32(renderW), float32(renderH)),
+		follow:    true,
+	}
 	paletteOptions := AvailablePalettes()
 	paletteNames := make([]string, len(paletteOptions))
 	for index, option := range paletteOptions {
@@ -486,25 +594,28 @@ func runGUI() error {
 	}
 	selectedPaletteIndex := 0
 	selectedPalette := paletteOptions[selectedPaletteIndex].Palette
-	img := canvas.NewImageFromImage(Render(grid, defaultMaxIter, selectedPalette))
+	img := canvas.NewImageFromImage(Render(state.grid, defaultMaxIter, selectedPalette))
 	img.FillMode = canvas.ImageFillContain
 	img.ScaleMode = canvas.ImageScaleFastest
-	displayed := start
 
 	a := app.New()
 	w := a.NewWindow("xbfrac")
+	state.window = w
 
 	xminE, xmaxE := widget.NewEntry(), widget.NewEntry()
 	yminE, ymaxE := widget.NewEntry(), widget.NewEntry()
 	iterE := widget.NewEntry()
+	state.xminEntry, state.xmaxEntry = xminE, xmaxE
+	state.yminEntry, state.ymaxEntry = yminE, ymaxE
+	state.iterEntry = iterE
 	var paletteSelect *widget.Select
-	calculating := false
 	repaint := func() {
-		img.Image = Render(grid, displayed.maxIter, selectedPalette)
+		img.Image = Render(state.grid, state.bounds.maxIter, selectedPalette)
 		img.Refresh()
 	}
+	state.repaint = repaint
 	paletteSelect = widget.NewSelect(paletteNames, func(name string) {
-		if calculating {
+		if state.calculating {
 			return
 		}
 		for index, option := range paletteOptions {
@@ -516,28 +627,21 @@ func runGUI() error {
 			}
 		}
 	})
+	state.paletteSelect = paletteSelect
 	paletteSelect.SetSelected(paletteNames[selectedPaletteIndex])
-	setBounds := func(b params) {
-		xminE.SetText(formatFloat(b.xmin))
-		xmaxE.SetText(formatFloat(b.xmax))
-		yminE.SetText(formatFloat(b.ymin))
-		ymaxE.SetText(formatFloat(b.ymax))
-	}
-	setBounds(start)
+	state.setBounds(state.bounds)
 	iterE.SetText(strconv.Itoa(defaultMaxIter))
 
-	imageSize := fyne.NewSize(float32(renderW), float32(renderH))
 	var imageWidget *tappableImage
-	follow := true
 	lockedAspect := float64(renderW) / float64(renderH)
-	resizeAgain := false
 	widthE, heightE := widget.NewEntry(), widget.NewEntry()
+	state.widthEntry, state.heightEntry = widthE, heightE
 	widthE.SetText(strconv.Itoa(renderW))
 	heightE.SetText(strconv.Itoa(renderH))
 	widthE.Disable()
 	heightE.Disable()
 	targetSize := func() (int, int, error) {
-		if follow {
+		if state.follow {
 			size := imageWidget.Size()
 			width, height := clampSize(int(size.Width), int(size.Height))
 			return width, height, nil
@@ -549,106 +653,30 @@ func runGUI() error {
 		height := int(math.Round(float64(width) / lockedAspect))
 		return width, height, validateSize(width, height)
 	}
-	var applyWindowSize func()
+	state.targetSize = targetSize
 
 	var calcBtn, resetBtn, saveBtn *widget.Button
-	recalc := func() {
-		if calculating {
-			return
-		}
-		pr, err := parseParams(xminE.Text, xmaxE.Text, yminE.Text, ymaxE.Text, iterE.Text)
-		if err != nil {
-			dialog.ShowError(err, w)
-			return
-		}
-		width, height, err := targetSize()
-		if err != nil {
-			dialog.ShowError(err, w)
-			return
-		}
-		calculating = true
-		calcBtn.Disable()
-		resetBtn.Disable()
-		saveBtn.Disable()
-		paletteSelect.Disable()
-		go func() {
-			g, err := Compute(width, height, pr.xmin, pr.xmax, pr.ymin, pr.ymax, pr.maxIter)
-			fyne.Do(func() {
-				calculating = false
-				calcBtn.Enable()
-				resetBtn.Enable()
-				saveBtn.Enable()
-				paletteSelect.Enable()
-				if err != nil {
-					dialog.ShowError(err, w)
-					return
-				}
-				displayed = pr
-				grid = g
-				renderW, renderH = width, height
-				imageSize = fyne.NewSize(float32(width), float32(height))
-				imageWidget.imageSize = imageSize
-				widthE.SetText(strconv.Itoa(width))
-				heightE.SetText(strconv.Itoa(height))
-				repaint()
-				if resizeAgain {
-					resizeAgain = false
-					applyWindowSize()
-				}
-			})
-		}()
-	}
-	zoomAt := func(position fyne.Position, size fyne.Size, zoom func(params, complex128) (params, error)) {
-		if calculating {
-			return
-		}
-		center, ok := mapTapToComplex(position, size, imageSize, displayed)
-		if !ok {
-			return
-		}
-		zoomed, err := zoom(displayed, center)
-		if err != nil {
-			dialog.ShowError(err, w)
-			return
-		}
-		setBounds(zoomed)
-		recalc()
-	}
-	applyWindowSize = func() {
-		if !follow {
-			return
-		}
-		if calculating {
-			resizeAgain = true
-			return
-		}
-		width, height, _ := targetSize()
-		if width == renderW && height == renderH {
-			return
-		}
-		setBounds(fitBoundsToAspect(displayed, width, height))
-		recalc()
-	}
-	imageWidget = newTappableImage(img, imageSize,
+	recalc := state.recalculate
+	imageWidget = newTappableImage(img, state.imageSize,
 		func(position fyne.Position, size fyne.Size) {
-			zoomAt(position, size, zoomIn)
+			state.zoomAt(position, size, zoomIn)
 		},
 		func(position fyne.Position, size fyne.Size) {
-			zoomAt(position, size, zoomOut)
+			state.zoomAt(position, size, zoomOut)
 		},
 		func(start, end fyne.Position, size fyne.Size, keepAspect bool) {
-			if calculating {
+			if state.calculating {
 				return
 			}
-			zoomed, ok := mapDragToBounds(start, end, size, imageSize, displayed, keepAspect)
+			zoomed, ok := mapDragToBounds(start, end, size, state.imageSize, state.bounds, keepAspect)
 			if !ok {
 				return
 			}
-			setBounds(zoomed)
+			state.setBounds(zoomed)
 			recalc()
 		},
 		func(deltaY float32) {
-			if calculating || deltaY == 0 {
+			if state.calculating || deltaY == 0 {
 				return
 			}
 			if deltaY > 0 {
@@ -658,24 +686,25 @@ func runGUI() error {
 			}
 			paletteSelect.SetSelected(paletteNames[selectedPaletteIndex])
 		})
+	state.imageWidget = imageWidget
 	var resizeTimer *time.Timer
 	imageWidget.onResize = func(fyne.Size) {
-		if !follow {
+		if !state.follow {
 			return
 		}
 		if resizeTimer != nil {
 			resizeTimer.Stop()
 		}
-		resizeTimer = time.AfterFunc(resizeDelay, func() { fyne.Do(applyWindowSize) })
+		resizeTimer = time.AfterFunc(resizeDelay, func() { fyne.Do(state.applyWindowSize) })
 	}
 	followCheck := widget.NewCheck("Fenstergröße folgen", func(on bool) {
-		follow = on
+		state.follow = on
 		if on {
 			widthE.Disable()
-			applyWindowSize()
+			state.applyWindowSize()
 			return
 		}
-		lockedAspect = float64(renderW) / float64(renderH)
+		lockedAspect = float64(state.renderWidth) / float64(state.renderHeight)
 		widthE.Enable()
 	})
 	followCheck.Checked = true
@@ -697,17 +726,17 @@ func runGUI() error {
 	calcBtn = widget.NewButton("Neu berechnen", recalc)
 	resetBtn = widget.NewButton("Zurücksetzen", func() {
 		if width, height, err := targetSize(); err == nil {
-			setBounds(fitBoundsToAspect(defaults, width, height))
+			state.setBounds(fitBoundsToAspect(defaults, width, height))
 		}
 		iterE.SetText(strconv.Itoa(defaultMaxIter))
 		paletteSelect.SetSelected(paletteNames[0])
 		recalc()
 	})
 	saveBtn = widget.NewButton("PNG speichern", func() {
-		if calculating {
+		if state.calculating {
 			return
 		}
-		exportImage := Render(grid, displayed.maxIter, selectedPalette)
+		exportImage := Render(state.grid, state.bounds.maxIter, selectedPalette)
 		saveDialog := dialog.NewFileSave(func(writer fyne.URIWriteCloser, err error) {
 			if err != nil {
 				dialog.ShowError(err, w)
@@ -728,6 +757,7 @@ func runGUI() error {
 		saveDialog.SetFilter(storage.NewExtensionFileFilter([]string{".png"}))
 		saveDialog.Show()
 	})
+	state.calcButton, state.resetButton, state.saveButton = calcBtn, resetBtn, saveBtn
 
 	form := container.NewVBox(
 		widget.NewLabel("xmin"), xminE,
