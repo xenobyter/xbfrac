@@ -2,7 +2,7 @@ package main
 
 import "image"
 
-// Render färbt ein Iterationsraster mit der Palette ein.
+// Render färbt jedes Element des Iterationsrasters mit p ein und liefert ein gleich großes RGBA-Bild.
 func Render(grid [][]int, maxIter int, p Palette) *image.RGBA {
 	h := len(grid)
 	w := 0

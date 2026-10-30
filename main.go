@@ -1,3 +1,4 @@
+// Package main stellt einen interaktiven Mandelbrot-Viewer bereit.
 package main
 
 import "log"

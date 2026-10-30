@@ -2,21 +2,23 @@ package main
 
 import "image/color"
 
-// Palette ordnet einer Iterationszahl eine Farbe zu.
+// Palette ordnet einem Iterationswert eine Farbe zu und kennzeichnet damit Punkte innerhalb der Menge.
 type Palette interface {
+	// Color liefert die Farbe für iter; Werte ab maxIter gelten als innerhalb der Menge.
 	Color(iter, maxIter int) color.Color
 }
 
-// GradientPalette interpoliert zyklisch zwischen Stützfarben; Punkte der Menge sind Inside.
+// GradientPalette interpoliert zyklisch zwischen Stützfarben; Punkte innerhalb der Menge erhalten Inside.
 type GradientPalette struct {
-	Stops  []color.RGBA
-	Period int // Iterationen pro Durchlauf des Verlaufs
-	Inside color.RGBA
+	Stops []color.RGBA // Farben, zwischen denen der Verlauf interpoliert.
+	Period int          // Iterationszahl pro vollständigem Verlaufszyklus.
+	Inside color.RGBA   // Farbe für Punkte innerhalb der Menge.
 }
 
+// PaletteOption verbindet den Anzeigenamen einer Palette mit ihrer Implementierung.
 type PaletteOption struct {
-	Name    string
-	Palette Palette
+	Name    string  // Name, der in der Oberfläche angezeigt wird.
+	Palette Palette // Implementierung, die Iterationswerte einfärbt.
 }
 
 // NewClassicPalette liefert die klassische blau-weiß-orange-schwarze Palette.
@@ -34,6 +36,7 @@ func NewClassicPalette() *GradientPalette {
 	}
 }
 
+// AvailablePalettes liefert die in der Oberfläche angebotenen Farbpaletten.
 func AvailablePalettes() []PaletteOption {
 	return []PaletteOption{
 		{Name: "Classic", Palette: NewClassicPalette()},
