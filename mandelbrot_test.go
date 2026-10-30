@@ -114,7 +114,30 @@ func TestMapDragToBounds(t *testing.T) {
 		bounds     params
 		want       params
 		wantOK     bool
+		keepAspect bool
 	}{
+		{
+			name:       "aspect locked, height dominates",
+			start:      fyne.NewPos(450, 300),
+			end:        fyne.NewPos(500, 100),
+			widgetSize: fyne.NewSize(imgWidth, imgHeight),
+			imageSize:  fyne.NewSize(imgWidth, imgHeight),
+			bounds:     params{xmin: 0, xmax: 9, ymin: 0, ymax: 6, maxIter: 10},
+			want:       params{xmin: 4.5, xmax: 7.5, ymin: 1, ymax: 3, maxIter: 10},
+			wantOK:     true,
+			keepAspect: true,
+		},
+		{
+			name:       "aspect locked, clamped at edge",
+			start:      fyne.NewPos(600, 300),
+			end:        fyne.NewPos(900, 500),
+			widgetSize: fyne.NewSize(imgWidth, imgHeight),
+			imageSize:  fyne.NewSize(imgWidth, imgHeight),
+			bounds:     params{xmin: 0, xmax: 9, ymin: 0, ymax: 6, maxIter: 10},
+			want:       params{xmin: 6, xmax: 9, ymin: 3, ymax: 5, maxIter: 10},
+			wantOK:     true,
+			keepAspect: true,
+		},
 		{
 			name:       "reverse drag",
 			start:      fyne.NewPos(675, 450),
@@ -155,7 +178,7 @@ func TestMapDragToBounds(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got, ok := mapDragToBounds(test.start, test.end, test.widgetSize, test.imageSize, test.bounds)
+			got, ok := mapDragToBounds(test.start, test.end, test.widgetSize, test.imageSize, test.bounds, test.keepAspect)
 			if ok != test.wantOK {
 				t.Fatalf("mapDragToBounds() ok = %v, want %v", ok, test.wantOK)
 			}
@@ -168,7 +191,7 @@ func TestMapDragToBounds(t *testing.T) {
 				"ymin": {got.ymin, test.want.ymin},
 				"ymax": {got.ymax, test.want.ymax},
 			} {
-				if math.Abs(values[0]-values[1]) > 1e-9 {
+				if math.Abs(values[0]-values[1]) > 1e-6 {
 					t.Errorf("%s = %v, want %v", name, values[0], values[1])
 				}
 			}

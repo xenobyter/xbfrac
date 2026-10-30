@@ -112,12 +112,43 @@ func clampToRect(position, origin fyne.Position, size fyne.Size) fyne.Position {
 	return position
 }
 
-func dragSelectionRect(start, end fyne.Position, widgetSize, imageSize fyne.Size) (fyne.Position, fyne.Size, bool) {
+// lockAspect passt end so an, dass das Rechteck das Seitenverhältnis des Bildes hat und im Bild bleibt.
+func lockAspect(start, end, imagePosition fyne.Position, imageDrawSize fyne.Size) fyne.Position {
+	aspect := imageDrawSize.Width / imageDrawSize.Height
+	dx, dy := end.X-start.X, end.Y-start.Y
+	signX, signY := float32(1), float32(1)
+	maxWidth := imagePosition.X + imageDrawSize.Width - start.X
+	if dx < 0 {
+		signX = -1
+		maxWidth = start.X - imagePosition.X
+	}
+	maxHeight := imagePosition.Y + imageDrawSize.Height - start.Y
+	if dy < 0 {
+		signY = -1
+		maxHeight = start.Y - imagePosition.Y
+	}
+	width := absFloat(dx)
+	if byHeight := absFloat(dy) * aspect; byHeight > width {
+		width = byHeight
+	}
+	if width > maxWidth {
+		width = maxWidth
+	}
+	if limit := maxHeight * aspect; width > limit {
+		width = limit
+	}
+	return fyne.NewPos(start.X+signX*width, start.Y+signY*width/aspect)
+}
+
+func dragSelectionRect(start, end fyne.Position, widgetSize, imageSize fyne.Size, keepAspect bool) (fyne.Position, fyne.Size, bool) {
 	imagePosition, imageDrawSize, ok := fittedImageRect(widgetSize, imageSize)
 	if !ok || !positionInRect(start, imagePosition, imageDrawSize) {
 		return fyne.Position{}, fyne.Size{}, false
 	}
 	end = clampToRect(end, imagePosition, imageDrawSize)
+	if keepAspect {
+		end = lockAspect(start, end, imagePosition, imageDrawSize)
+	}
 	left, right := start.X, end.X
 	top, bottom := start.Y, end.Y
 	if left > right {
@@ -144,8 +175,8 @@ func mapTapToComplex(position fyne.Position, widgetSize, imageSize fyne.Size, bo
 	return complex(real, imag), true
 }
 
-func mapDragToBounds(start, end fyne.Position, widgetSize, imageSize fyne.Size, bounds params) (params, bool) {
-	selectionPosition, selectionSize, ok := dragSelectionRect(start, end, widgetSize, imageSize)
+func mapDragToBounds(start, end fyne.Position, widgetSize, imageSize fyne.Size, bounds params, keepAspect bool) (params, bool) {
+	selectionPosition, selectionSize, ok := dragSelectionRect(start, end, widgetSize, imageSize, keepAspect)
 	if !ok || selectionSize.Width < minDragSize || selectionSize.Height < minDragSize {
 		return bounds, false
 	}
@@ -199,8 +230,9 @@ type tappableImage struct {
 	imageSize      fyne.Size
 	onTap          func(fyne.Position, fyne.Size)
 	onSecondaryTap func(fyne.Position, fyne.Size)
-	onDrag         func(fyne.Position, fyne.Position, fyne.Size)
+	onDrag         func(fyne.Position, fyne.Position, fyne.Size, bool)
 	onScroll       func(float32)
+	keepAspect     bool
 	dragStart      fyne.Position
 	dragEnd        fyne.Position
 	pointerDown    bool
@@ -208,7 +240,7 @@ type tappableImage struct {
 	suppressTap    bool
 }
 
-func newTappableImage(image *canvas.Image, imageSize fyne.Size, onTap, onSecondaryTap func(fyne.Position, fyne.Size), onDrag func(fyne.Position, fyne.Position, fyne.Size), onScroll func(float32)) *tappableImage {
+func newTappableImage(image *canvas.Image, imageSize fyne.Size, onTap, onSecondaryTap func(fyne.Position, fyne.Size), onDrag func(fyne.Position, fyne.Position, fyne.Size, bool), onScroll func(float32)) *tappableImage {
 	tappable := &tappableImage{
 		image: image, imageSize: imageSize, onTap: onTap, onSecondaryTap: onSecondaryTap, onDrag: onDrag, onScroll: onScroll,
 		selection: &canvas.Rectangle{
@@ -236,10 +268,19 @@ func (r *tappableImageRenderer) Layout(size fyne.Size) {
 		r.widget.selection.Hide()
 		return
 	}
-	position, selectionSize, ok := dragSelectionRect(r.widget.dragStart, r.widget.dragEnd, size, r.widget.imageSize)
+	position, selectionSize, ok := dragSelectionRect(r.widget.dragStart, r.widget.dragEnd, size, r.widget.imageSize, r.widget.keepAspect)
 	if !ok {
 		r.widget.selection.Hide()
 		return
+	}
+	if r.widget.keepAspect {
+		r.widget.selection.FillColor = color.NRGBA{R: 255, G: 140, B: 0, A: 48}
+		r.widget.selection.StrokeColor = color.NRGBA{R: 255, G: 140, B: 0, A: 255}
+		r.widget.selection.StrokeWidth = 2
+	} else {
+		r.widget.selection.FillColor = color.NRGBA{R: 0, G: 0, B: 0, A: 24}
+		r.widget.selection.StrokeColor = color.White
+		r.widget.selection.StrokeWidth = 1
 	}
 	r.widget.selection.Show()
 	r.widget.selection.Move(position)
@@ -267,6 +308,7 @@ func (t *tappableImage) MouseDown(event *desktop.MouseEvent) {
 		return
 	}
 	t.suppressTap = false
+	t.keepAspect = event.Modifier&fyne.KeyModifierShift != 0
 	if t.onDrag == nil {
 		return
 	}
@@ -295,6 +337,17 @@ func (t *tappableImage) Dragged(event *fyne.DragEvent) {
 
 func (t *tappableImage) DragEnd() {}
 
+// setKeepAspect wird von den Shift-Tasten-Events des Fensters aufgerufen.
+func (t *tappableImage) setKeepAspect(keep bool) {
+	if t.keepAspect == keep {
+		return
+	}
+	t.keepAspect = keep
+	if t.dragging {
+		t.Refresh()
+	}
+}
+
 func (t *tappableImage) MouseUp(event *desktop.MouseEvent) {
 	if event.Button != desktop.MouseButtonPrimary || !t.pointerDown {
 		return
@@ -308,11 +361,11 @@ func (t *tappableImage) MouseUp(event *desktop.MouseEvent) {
 		return
 	}
 	t.suppressTap = true
-	start, end := t.dragStart, t.dragEnd
+	start, end, keep := t.dragStart, t.dragEnd, t.keepAspect
 	t.dragging = false
 	t.Refresh()
 	if t.onDrag != nil {
-		t.onDrag(start, end, t.Size())
+		t.onDrag(start, end, t.Size(), keep)
 	}
 }
 
@@ -460,11 +513,11 @@ func runGUI() error {
 		func(position fyne.Position, size fyne.Size) {
 			zoomAt(position, size, zoomOut)
 		},
-		func(start, end fyne.Position, size fyne.Size) {
+		func(start, end fyne.Position, size fyne.Size, keepAspect bool) {
 			if calculating {
 				return
 			}
-			zoomed, ok := mapDragToBounds(start, end, size, imageSize, displayed)
+			zoomed, ok := mapDragToBounds(start, end, size, imageSize, displayed, keepAspect)
 			if !ok {
 				return
 			}
@@ -485,6 +538,21 @@ func runGUI() error {
 			}
 			paletteSelect.SetSelected(paletteNames[selectedPaletteIndex])
 		})
+	if dc, ok := w.Canvas().(desktop.Canvas); ok {
+		isShift := func(e *fyne.KeyEvent) bool {
+			return e.Name == desktop.KeyShiftLeft || e.Name == desktop.KeyShiftRight
+		}
+		dc.SetOnKeyDown(func(e *fyne.KeyEvent) {
+			if isShift(e) {
+				imageWidget.setKeepAspect(true)
+			}
+		})
+		dc.SetOnKeyUp(func(e *fyne.KeyEvent) {
+			if isShift(e) {
+				imageWidget.setKeepAspect(false)
+			}
+		})
+	}
 	calcBtn = widget.NewButton("Neu berechnen", recalc)
 	resetBtn = widget.NewButton("Zurücksetzen", func() {
 		setDefaults()
