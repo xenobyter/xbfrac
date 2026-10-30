@@ -104,6 +104,81 @@ func TestMapTapToComplex(t *testing.T) {
 	}
 }
 
+func TestMapDragToBounds(t *testing.T) {
+	tests := []struct {
+		name       string
+		start      fyne.Position
+		end        fyne.Position
+		widgetSize fyne.Size
+		imageSize  fyne.Size
+		bounds     params
+		want       params
+		wantOK     bool
+	}{
+		{
+			name:       "reverse drag",
+			start:      fyne.NewPos(675, 450),
+			end:        fyne.NewPos(225, 150),
+			widgetSize: fyne.NewSize(imgWidth, imgHeight),
+			imageSize:  fyne.NewSize(imgWidth, imgHeight),
+			bounds:     params{xmin: -2.2, xmax: 1, ymin: -1.2, ymax: 1.2, maxIter: 200},
+			want:       params{xmin: -1.4, xmax: 0.2, ymin: -0.6, ymax: 0.6, maxIter: 200},
+			wantOK:     true,
+		},
+		{
+			name:       "letterbox offset and clamp",
+			start:      fyne.NewPos(150, 150),
+			end:        fyne.NewPos(700, 600),
+			widgetSize: fyne.NewSize(600, 600),
+			imageSize:  fyne.NewSize(900, 600),
+			bounds:     params{xmin: 0, xmax: 8, ymin: -4, ymax: 4, maxIter: 100},
+			want:       params{xmin: 2, xmax: 8, ymin: -3, ymax: 4, maxIter: 100},
+			wantOK:     true,
+		},
+		{
+			name:       "start in letterbox",
+			start:      fyne.NewPos(150, 50),
+			end:        fyne.NewPos(450, 450),
+			widgetSize: fyne.NewSize(600, 600),
+			imageSize:  fyne.NewSize(900, 600),
+			bounds:     params{xmin: 0, xmax: 8, ymin: -4, ymax: 4},
+		},
+		{
+			name:       "selection too small",
+			start:      fyne.NewPos(10, 10),
+			end:        fyne.NewPos(13, 13),
+			widgetSize: fyne.NewSize(imgWidth, imgHeight),
+			imageSize:  fyne.NewSize(imgWidth, imgHeight),
+			bounds:     params{xmin: 0, xmax: 8, ymin: -4, ymax: 4},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, ok := mapDragToBounds(test.start, test.end, test.widgetSize, test.imageSize, test.bounds)
+			if ok != test.wantOK {
+				t.Fatalf("mapDragToBounds() ok = %v, want %v", ok, test.wantOK)
+			}
+			if !ok {
+				return
+			}
+			for name, values := range map[string][2]float64{
+				"xmin": {got.xmin, test.want.xmin},
+				"xmax": {got.xmax, test.want.xmax},
+				"ymin": {got.ymin, test.want.ymin},
+				"ymax": {got.ymax, test.want.ymax},
+			} {
+				if math.Abs(values[0]-values[1]) > 1e-9 {
+					t.Errorf("%s = %v, want %v", name, values[0], values[1])
+				}
+			}
+			if got.maxIter != test.want.maxIter {
+				t.Errorf("maxIter = %d, want %d", got.maxIter, test.want.maxIter)
+			}
+		})
+	}
+}
+
 func TestZoomIn(t *testing.T) {
 	bounds := params{xmin: -2.2, xmax: 1, ymin: -1.2, ymax: 1.2, maxIter: 200}
 	got, err := zoomIn(bounds, complex(-0.5, 0.25))
