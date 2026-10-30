@@ -9,6 +9,7 @@
 - Vergrößern per Linksklick oder durch Auswahl eines Rechtecks
 - Verkleinern per Rechtsklick
 - Palettenwechsel mit dem Mausrad
+- Export der aktuellen Ansicht als PNG
 - Eingabefelder für die Grenzen `xmin`, `xmax`, `ymin`, `ymax` und `maxIter`
 - Zurücksetzen auf den Standardausschnitt und die Classic-Palette
 
@@ -38,4 +39,4 @@ go test ./...
 - `mandelbrot.go` berechnet die Iterationswerte und das zweidimensionale Raster.
 - `palette.go` stellt Farbpaletten und Farbinterpolation bereit.
 - `render.go` wandelt das Raster in ein RGBA-Bild um.
-- `gui.go` enthält die Fyne-Oberfläche, Parametervalidierung sowie Maus- und Zoominteraktionen.
+- `gui.go` enthält die Fyne-Oberfläche, Parametervalidierung, Maus- und Zoominteraktionen sowie den PNG-Export.

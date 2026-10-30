@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"image/color"
+	"image/png"
 	"strconv"
 	"strings"
 
@@ -12,6 +13,7 @@ import (
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/driver/desktop"
+	"fyne.io/fyne/v2/storage"
 	"fyne.io/fyne/v2/widget"
 )
 
@@ -455,7 +457,7 @@ func runGUI() error {
 	}
 	setDefaults()
 
-	var calcBtn, resetBtn *widget.Button
+	var calcBtn, resetBtn, saveBtn *widget.Button
 	recalc := func() {
 		if calculating {
 			return
@@ -468,6 +470,7 @@ func runGUI() error {
 		calculating = true
 		calcBtn.Disable()
 		resetBtn.Disable()
+		saveBtn.Disable()
 		paletteSelect.Disable()
 		go func() {
 			g, err := Compute(imgWidth, imgHeight, pr.xmin, pr.xmax, pr.ymin, pr.ymax, pr.maxIter)
@@ -475,6 +478,7 @@ func runGUI() error {
 				calculating = false
 				defer calcBtn.Enable()
 				defer resetBtn.Enable()
+				defer saveBtn.Enable()
 				defer paletteSelect.Enable()
 				if err != nil {
 					dialog.ShowError(err, w)
@@ -559,6 +563,31 @@ func runGUI() error {
 		paletteSelect.SetSelected(paletteNames[0])
 		recalc()
 	})
+	saveBtn = widget.NewButton("PNG speichern", func() {
+		if calculating {
+			return
+		}
+		exportImage := Render(grid, displayed.maxIter, selectedPalette)
+		saveDialog := dialog.NewFileSave(func(writer fyne.URIWriteCloser, err error) {
+			if err != nil {
+				dialog.ShowError(err, w)
+				return
+			}
+			if writer == nil {
+				return
+			}
+			encodeErr := png.Encode(writer, exportImage)
+			closeErr := writer.Close()
+			if encodeErr != nil {
+				dialog.ShowError(encodeErr, w)
+			} else if closeErr != nil {
+				dialog.ShowError(closeErr, w)
+			}
+		}, w)
+		saveDialog.SetFileName("mandelbrot.png")
+		saveDialog.SetFilter(storage.NewExtensionFileFilter([]string{".png"}))
+		saveDialog.Show()
+	})
 
 	form := container.NewVBox(
 		widget.NewLabel("xmin"), xminE,
@@ -567,7 +596,7 @@ func runGUI() error {
 		widget.NewLabel("ymax"), ymaxE,
 		widget.NewLabel("maxIter"), iterE,
 		widget.NewLabel("Farbpalette"), paletteSelect,
-		calcBtn, resetBtn,
+		calcBtn, resetBtn, saveBtn,
 	)
 	sidebar := container.NewBorder(nil, nil, nil, widget.NewSeparator(),
 		container.NewPadded(form))
